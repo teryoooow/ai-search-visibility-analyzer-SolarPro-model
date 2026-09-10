@@ -1,5 +1,6 @@
 """
 AI Search Visibility Analyzer - SEO Module
+
 Analyzes traditional search engine optimization signals.
 
 Covers:
@@ -12,7 +13,7 @@ Covers:
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -20,9 +21,15 @@ import requests
 from bs4 import BeautifulSoup
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Data class
+# ═══════════════════════════════════════════════════════════════════════
+
+
 @dataclass
 class SEOMetrics:
     """SEO analysis results for a URL."""
+
     url: str
     title: str = ""
     title_length: int = 0
@@ -59,8 +66,11 @@ class SEOMetrics:
             "title": self.title,
             "title_length": self.title_length,
             "title_score": round(self.title_score, 1),
-            "meta_description": (self.meta_description[:100] + "...")
-                                if len(self.meta_description) > 100 else self.meta_description,
+            "meta_description": (
+                self.meta_description[:100] + "..."
+                if len(self.meta_description) > 100
+                else self.meta_description
+            ),
             "meta_description_length": self.meta_description_length,
             "meta_description_score": round(self.meta_description_score, 1),
             "h1_count": self.h1_count,
@@ -88,8 +98,19 @@ class SEOMetrics:
         }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
 def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
-    """Fetch HTML content from a URL with a realistic user-agent."""
+    """Fetch HTML content from a URL.
+
+    Returns the response body even on non-200 status codes so callers can
+    score whatever the server returned (many error pages still emit title,
+    meta, and schema markup).  Returns None on network/parse errors.
+    """
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -100,60 +121,53 @@ def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        resp.raise_for_status()
+        resp = requests.get(
+            url, headers=headers, timeout=timeout, allow_redirects=True
+        )
         return resp.text
     except requests.RequestException:
         return None
 
 
-def analyze_seo(url: str) -> SEOMetrics:
-    """Run full SEO analysis on a URL."""
-    metrics = SEOMetrics(url=url)
+# ═══════════════════════════════════════════════════════════════════════
+#  Shared scoring logic (used by both normal and degraded paths)
+# ═══════════════════════════════════════════════════════════════════════
 
-    html = fetch_page(url)
-    if html is None:
-        metrics.page_status = 0
-        metrics.overall_score = 0.0
-        return metrics
 
-    # Get final status code
-    try:
-        resp = requests.get(url, timeout=15, allow_redirects=True)
-        metrics.page_status = resp.status_code
-    except Exception:
-        metrics.page_status = 0
+def _compute_seo_scores(
+    metrics: SEOMetrics,
+    soup: BeautifulSoup,
+    base_domain: str,
+    *,
+    page_is_degraded: bool = False,
+) -> None:
+    """Populate all SEO sub-scores from a parsed BeautifulSoup tree.
 
-    if metrics.page_status != 200:
-        metrics.overall_score = 0.0
-        return metrics
+    When *page_is_degraded* is True the CWVS score is left at the fallback
+    50.0 (PageSpeed Insights does not audit non-200 pages).
+    """
 
-    soup = BeautifulSoup(html, "html.parser")
-    base_domain = urlparse(url).netloc.lower()
-
-    # Title tag
+    # ── Title ──────────────────────────────────────────────────────────
     title_tag = soup.find("title")
     if title_tag:
         metrics.title = title_tag.get_text(strip=True)
         metrics.title_length = len(metrics.title)
         if 30 <= metrics.title_length <= 60:
             metrics.title_score = 100.0
-        elif metrics.title_length == 0:
-            metrics.title_score = 0.0
         elif metrics.title_length < 30:
             metrics.title_score = 50.0
         else:
             metrics.title_score = 70.0
+    else:
+        metrics.title_score = 0.0
 
-    # Meta description
+    # ── Meta description ───────────────────────────────────────────────
     desc_tag = soup.find("meta", attrs={"name": "description"})
     if desc_tag and desc_tag.get("content"):
         metrics.meta_description = desc_tag["content"].strip()
         metrics.meta_description_length = len(metrics.meta_description)
         if 100 <= metrics.meta_description_length <= 160:
             metrics.meta_description_score = 100.0
-        elif metrics.meta_description_length == 0:
-            metrics.meta_description_score = 0.0
         elif metrics.meta_description_length < 100:
             metrics.meta_description_score = 60.0
         else:
@@ -161,7 +175,7 @@ def analyze_seo(url: str) -> SEOMetrics:
     else:
         metrics.meta_description_score = 0.0
 
-    # Headings
+    # ── Headings ───────────────────────────────────────────────────────
     h1_tags = soup.find_all("h1")
     metrics.h1_count = len(h1_tags)
     if metrics.h1_count == 1:
@@ -169,17 +183,16 @@ def analyze_seo(url: str) -> SEOMetrics:
     elif metrics.h1_count == 0:
         metrics.h1_score = 20.0
     else:
-        metrics.h1_score = max(0, 100 - (metrics.h1_count - 1) * 25)
+        metrics.h1_score = max(0.0, 100.0 - (metrics.h1_count - 1) * 25)
 
-    h2_tags = soup.find_all("h2")
-    metrics.h2_count = len(h2_tags)
+    metrics.h2_count = len(soup.find_all("h2"))
 
-    # Word count and readability
+    # ── Word count + readability ───────────────────────────────────────
     body_text = soup.get_text(separator=" ", strip=True)
     words = body_text.split()
     metrics.word_count = len(words)
 
-    sentences = re.split(r'[.!?]+', body_text)
+    sentences = re.split(r"[.!?]+", body_text)
     sentences = [s.strip() for s in sentences if s.strip()]
     if sentences:
         avg_sentence_len = sum(len(s.split()) for s in sentences) / len(sentences)
@@ -194,7 +207,7 @@ def analyze_seo(url: str) -> SEOMetrics:
     else:
         metrics.readability_score = 0.0
 
-    # Links
+    # ── Links ──────────────────────────────────────────────────────────
     links = soup.find_all("a", href=True)
     internal = 0
     external = 0
@@ -202,7 +215,9 @@ def analyze_seo(url: str) -> SEOMetrics:
         href = link["href"].lower()
         if href.startswith(("http", "https")):
             link_domain = urlparse(href).netloc.lower()
-            if link_domain == base_domain or link_domain.endswith("." + base_domain):
+            if link_domain == base_domain or link_domain.endswith(
+                "." + base_domain
+            ):
                 internal += 1
             else:
                 external += 1
@@ -223,7 +238,7 @@ def analyze_seo(url: str) -> SEOMetrics:
     else:
         metrics.link_ratio_score = 0.0
 
-    # Images / alt text
+    # ── Images / alt text ──────────────────────────────────────────────
     images = soup.find_all("img")
     metrics.images_total = len(images)
     metrics.images_with_alt = sum(1 for img in images if img.get("alt"))
@@ -240,12 +255,12 @@ def analyze_seo(url: str) -> SEOMetrics:
     else:
         metrics.alt_coverage_score = 100.0
 
-    # Canonical
+    # ── Canonical ──────────────────────────────────────────────────────
     canonical_tag = soup.find("link", rel="canonical")
     metrics.canonical_present = canonical_tag is not None
     metrics.canonical_score = 100.0 if metrics.canonical_present else 0.0
 
-    # Robots meta
+    # ── Robots meta ────────────────────────────────────────────────────
     robots_tag = soup.find("meta", attrs={"name": "robots"})
     if robots_tag and robots_tag.get("content"):
         metrics.robots_meta = robots_tag["content"].lower()
@@ -258,45 +273,48 @@ def analyze_seo(url: str) -> SEOMetrics:
     else:
         metrics.robots_score = 100.0
 
-    # Core Web Vitals via PageSpeed Insights API
-    cwvs_score = 50.0  # default fallback
-    try:
-        psi_resp = requests.get(
-            "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
-            params={"url": url, "strategy": "desktop"},
-            timeout=30,
-        )
-        if psi_resp.status_code == 200:
-            psi_data = psi_resp.json()
-            lr = psi_data.get("lighthouseResult", {})
-            audits = lr.get("audits", {})
+    # ── Core Web Vitals (only for 200 pages) ──────────────────────────
+    if page_is_degraded:
+        metrics.cwvs_score = 50.0
+        metrics.cwvs_fetched = False
+    else:
+        cwvs_score = 50.0  # default fallback
+        try:
+            psi_resp = requests.get(
+                "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+                params={"url": metrics.url, "strategy": "desktop"},
+                timeout=30,
+            )
+            if psi_resp.status_code == 200:
+                psi_data = psi_resp.json()
+                lr = psi_data.get("lighthouseResult", {})
+                audits = lr.get("audits", {})
 
-            lcp_data = audits.get("largest-contentful-paint", {})
-            fid_data = audits.get("first-input-delay", {})
-            cls_data = audits.get("cumulative-layout-shift", {})
+                lcp_data = audits.get("largest-contentful-paint", {})
+                fid_data = audits.get("first-input-delay", {})
+                cls_data = audits.get("cumulative-layout-shift", {})
 
-            metrics.lcp = lcp_data.get("numericValue")
-            metrics.fid = fid_data.get("numericValue")
-            metrics.cls = cls_data.get("numericValue")
-            metrics.cwvs_fetched = True
+                metrics.lcp = lcp_data.get("numericValue")
+                metrics.fid = fid_data.get("numericValue")
+                metrics.cls = cls_data.get("numericValue")
+                metrics.cwvs_fetched = True
 
-            cwvs_score = 100.0
-            if metrics.lcp and metrics.lcp > 2500:
-                cwvs_score -= 25
-            if metrics.fid and metrics.fid > 100:
-                cwvs_score -= 25
-            if metrics.cls and metrics.cls > 0.1:
-                cwvs_score -= 25
-            metrics.cwvs_score = max(0, cwvs_score)
-        else:
-            # PSI API returned an error status (e.g. rate-limited, blocked)
+                cwvs_score = 100.0
+                if metrics.lcp and metrics.lcp > 2500:
+                    cwvs_score -= 25
+                if metrics.fid and metrics.fid > 100:
+                    cwvs_score -= 25
+                if metrics.cls and metrics.cls > 0.1:
+                    cwvs_score -= 25
+                metrics.cwvs_score = max(0, cwvs_score)
+            else:
+                metrics.cwvs_fetched = False
+                metrics.cwvs_score = 50.0
+        except Exception:
             metrics.cwvs_fetched = False
             metrics.cwvs_score = 50.0
-    except Exception:
-        metrics.cwvs_fetched = False
-        metrics.cwvs_score = 50.0
 
-    # Overall SEO score (weighted average)
+    # ── Overall (weighted average) ─────────────────────────────────────
     weights = {
         "title_score": 0.15,
         "meta_description_score": 0.15,
@@ -311,13 +329,76 @@ def analyze_seo(url: str) -> SEOMetrics:
     overall = sum(getattr(metrics, k) * w for k, w in weights.items())
     metrics.overall_score = round(overall, 1)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Public entry point
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def analyze_seo(url: str) -> SEOMetrics:
+    """Run full SEO analysis on a URL.
+
+    Returns SEOMetrics with sub-scores for every signal.  When the page
+    returns a non-200 HTTP status (403 / 404 / 5xx / ...) the body is
+    still parsed and scored — the caller can check ``page_status`` to see
+    whether the analysis was run against a fully accessible page.
+    """
+
+    metrics = SEOMetrics(url=url)
+
+    html = fetch_page(url)
+    if html is None:
+        metrics.page_status = 0
+        metrics.overall_score = 0.0
+        return metrics
+
+    # Record the actual HTTP status without raising.
+    try:
+        resp = requests.get(url, timeout=15, allow_redirects=True)
+        metrics.page_status = resp.status_code
+    except Exception:
+        metrics.page_status = 0
+
+    soup = BeautifulSoup(html, "html.parser")
+    base_domain = urlparse(url).netloc.lower()
+
+    _compute_seo_scores(
+        metrics,
+        soup,
+        base_domain,
+        page_is_degraded=(metrics.page_status != 200),
+    )
+
     return metrics
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         print("Usage: python seo.py <URL>")
         sys.exit(1)
+
     result = analyze_seo(sys.argv[1])
-    print(result.to_dict())
+    d = result.to_dict()
+    print(f"URL: {d['url']}")
+    print(f"Page status: {d['page_status']}")
+    print(f"Overall SEO score: {d['overall_score']}/100")
+    print()
+    print("Sub-scores:")
+    for k in [
+        "title_score",
+        "meta_description_score",
+        "h1_score",
+        "readability_score",
+        "link_ratio_score",
+        "alt_coverage_score",
+        "canonical_score",
+        "robots_score",
+        "cwvs_score",
+    ]:
+        print(f"  {k:<25} {d[k]:>6.1f}")

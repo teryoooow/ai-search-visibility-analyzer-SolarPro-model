@@ -1,5 +1,6 @@
 """
 AI Search Visibility Analyzer - AEO Module
+
 Analyzes Answer Engine Optimization signals.
 
 Covers:
@@ -13,16 +14,22 @@ Covers:
 import re
 import json
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Data class
+# ═══════════════════════════════════════════════════════════════════════
+
+
 @dataclass
 class AEOMetrics:
     """AEO analysis results for a URL."""
+
     url: str
     fetch_failed: bool = False
     schema_present: bool = False
@@ -34,9 +41,9 @@ class AEOMetrics:
     has_article_schema: bool = False
     has_product_schema: bool = False
     has_local_business_schema: bool = False
-    question_count: int = 0  # Visible question patterns in text
+    question_count: int = 0
     answer_quality_score: float = 0.0
-    definition_count: int = 0  # "X is..." pattern density
+    definition_count: int = 0
     list_present: bool = False
     table_present: bool = False
     featured_snippet_signals: int = 0
@@ -45,6 +52,7 @@ class AEOMetrics:
     def to_dict(self) -> dict:
         return {
             "url": self.url,
+            "fetch_failed": self.fetch_failed,
             "schema_present": self.schema_present,
             "schema_types": self.schema_types,
             "has_faq_schema": self.has_faq_schema,
@@ -64,8 +72,19 @@ class AEOMetrics:
         }
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
 def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
-    """Fetch HTML content from a URL."""
+    """Fetch HTML content from a URL.
+
+    Returns the response body even on non-200 status codes so callers can
+    score whatever the server returned.  Returns None on network/parse
+    errors.
+    """
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -73,10 +92,12 @@ def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
             "Chrome/120.0.0.0 Safari/537.36"
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        resp.raise_for_status()
+        resp = requests.get(
+            url, headers=headers, timeout=timeout, allow_redirects=True
+        )
         return resp.text
     except requests.RequestException:
         return None
@@ -84,8 +105,9 @@ def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
 
 def extract_json_ld(soup: BeautifulSoup) -> List[dict]:
     """Extract all JSON-LD structured data from the page."""
+
     scripts = soup.find_all("script", type="application/ld+json")
-    results = []
+    results: List[dict] = []
     for script in scripts:
         try:
             data = json.loads(script.string or "")
@@ -98,8 +120,14 @@ def extract_json_ld(soup: BeautifulSoup) -> List[dict]:
     return results
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Public entry point
+# ═══════════════════════════════════════════════════════════════════════
+
+
 def analyze_aeo(url: str) -> AEOMetrics:
     """Run full AEO analysis on a URL."""
+
     metrics = AEOMetrics(url=url)
 
     html = fetch_page(url)
@@ -112,7 +140,7 @@ def analyze_aeo(url: str) -> AEOMetrics:
     body_text = soup.get_text(separator=" ", strip=True)
     text_lower = body_text.lower()
 
-    # ── Schema.org detection ──
+    # ── Schema.org detection ───────────────────────────────────────────
     json_ld_data = extract_json_ld(soup)
     metrics.schema_present = len(json_ld_data) > 0
 
@@ -165,23 +193,23 @@ def analyze_aeo(url: str) -> AEOMetrics:
             else:
                 metrics.howto_count += 1
 
-    # ── Question patterns in visible text ──
+    # ── Question patterns in visible text ──────────────────────────────
     # Count FAQ-like patterns: questions ending with ?
-    questions = re.findall(r'[A-Z][^?]*\?', body_text)
+    questions = re.findall(r"[A-Z][^?]*\?", body_text)
     metrics.question_count = len(questions)
 
     # Also detect Q: / A: patterns
-    qa_pairs = re.findall(r'[Qq]\s*[:\.]\s*[A-Za-z]{10,}', body_text)
+    qa_pairs = re.findall(r"[Qq]\s*[:\.]\s*[A-Za-z]{10,}", body_text)
     metrics.question_count += len(qa_pairs)
 
-    # ── Definition patterns ("X is...", "X refers to...") ──
+    # ── Definition patterns ("X is...", "X refers to...") ─────────────
     definitions = re.findall(
-        r'[A-Z][a-z]+ (?:is|refers to|means|describes|represents|known as)\s',
+        r"[A-Z][a-z]+ (?:is|refers to|means|describes|represents|known as)\s",
         body_text,
     )
     metrics.definition_count = len(definitions)
 
-    # ── Featured snippet signals ──
+    # ── Featured snippet signals ───────────────────────────────────────
     # Lists
     lists = soup.find_all(["ul", "ol"])
     metrics.list_present = len(lists) > 0
@@ -211,8 +239,7 @@ def analyze_aeo(url: str) -> AEOMetrics:
 
     metrics.featured_snippet_signals = signals
 
-    # ── Answer quality score ──
-    # Based on: question density, definition density, structured data, lists/tables
+    # ── Answer quality score ───────────────────────────────────────────
     aeo_components = {
         "schema_bonus": 30.0 if metrics.schema_present else 0.0,
         "faq_bonus": 20.0 if metrics.has_faq_schema else 0.0,
@@ -225,7 +252,7 @@ def analyze_aeo(url: str) -> AEOMetrics:
     metrics.answer_quality_score = sum(aeo_components.values())
     metrics.answer_quality_score = min(100.0, metrics.answer_quality_score)
 
-    # ── Overall AEO score ──
+    # ── Overall AEO score ──────────────────────────────────────────────
     weights = {
         "answer_quality_score": 0.40,
         "featured_snippet_signals": 0.30,
@@ -236,20 +263,42 @@ def analyze_aeo(url: str) -> AEOMetrics:
     question_count_score = min(100.0, metrics.question_count * 10)
 
     overall = (
-        metrics.answer_quality_score * weights["answer_quality_score"] +
-        (metrics.featured_snippet_signals / 10.0 * 100) * weights["featured_snippet_signals"] +
-        schema_present_score * weights["schema_present_score"] +
-        question_count_score * weights["question_count_score"]
+        metrics.answer_quality_score * weights["answer_quality_score"]
+        + (metrics.featured_snippet_signals / 10.0 * 100)
+        * weights["featured_snippet_signals"]
+        + schema_present_score * weights["schema_present_score"]
+        + question_count_score * weights["question_count_score"]
     )
     metrics.overall_score = round(min(100.0, overall), 1)
 
     return metrics
 
 
+# ═══════════════════════════════════════════════════════════════════════
+#  CLI
+# ═══════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         print("Usage: python aeo.py <URL>")
         sys.exit(1)
+
     result = analyze_aeo(sys.argv[1])
-    print(result.to_dict())
+    d = result.to_dict()
+    print(f"URL: {d['url']}")
+    print(f"Schema present: {d['schema_present']}")
+    print(f"Schema types: {d['schema_types']}")
+    print(f"FAQ schema: {d['has_faq_schema']} (count={d['faq_count']})")
+    print(f"HowTo schema: {d['has_howto_schema']} (count={d['howto_count']})")
+    print(f"Article schema: {d['has_article_schema']}")
+    print(f"Product schema: {d['has_product_schema']}")
+    print(f"LocalBusiness schema: {d['has_local_business_schema']}")
+    print(f"Questions detected: {d['question_count']}")
+    print(f"Definition patterns: {d['definition_count']}")
+    print(f"Lists present: {d['list_present']}")
+    print(f"Tables present: {d['table_present']}")
+    print(f"Featured snippet signals: {d['featured_snippet_signals']}")
+    print(f"Answer quality score: {d['answer_quality_score']}")
+    print(f"Overall AEO score: {d['overall_score']}/100")

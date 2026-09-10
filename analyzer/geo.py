@@ -75,6 +75,13 @@ class GEOMetrics:
 
 
 def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
+    """Fetch HTML content from a URL.
+
+    Returns the response body even on non-200 status codes so callers can
+    score whatever the server returned.  Returns None on network/parse
+    errors.
+    """
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -82,10 +89,12 @@ def fetch_page(url: str, timeout: int = 15) -> Optional[str]:
             "Chrome/120.0.0.0 Safari/537.36"
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        resp.raise_for_status()
+        resp = requests.get(
+            url, headers=headers, timeout=timeout, allow_redirects=True
+        )
         return resp.text
     except requests.RequestException:
         return None
