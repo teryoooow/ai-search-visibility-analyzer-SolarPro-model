@@ -24,6 +24,7 @@ from bs4 import BeautifulSoup
 class AEOMetrics:
     """AEO analysis results for a URL."""
     url: str
+    fetch_failed: bool = False
     schema_present: bool = False
     schema_types: List[str] = field(default_factory=list)
     has_faq_schema: bool = False
@@ -103,6 +104,7 @@ def analyze_aeo(url: str) -> AEOMetrics:
 
     html = fetch_page(url)
     if html is None:
+        metrics.fetch_failed = True
         metrics.overall_score = 0.0
         return metrics
 

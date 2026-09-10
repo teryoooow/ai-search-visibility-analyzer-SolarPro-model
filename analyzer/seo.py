@@ -259,6 +259,7 @@ def analyze_seo(url: str) -> SEOMetrics:
         metrics.robots_score = 100.0
 
     # Core Web Vitals via PageSpeed Insights API
+    cwvs_score = 50.0  # default fallback
     try:
         psi_resp = requests.get(
             "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
@@ -287,6 +288,10 @@ def analyze_seo(url: str) -> SEOMetrics:
             if metrics.cls and metrics.cls > 0.1:
                 cwvs_score -= 25
             metrics.cwvs_score = max(0, cwvs_score)
+        else:
+            # PSI API returned an error status (e.g. rate-limited, blocked)
+            metrics.cwvs_fetched = False
+            metrics.cwvs_score = 50.0
     except Exception:
         metrics.cwvs_fetched = False
         metrics.cwvs_score = 50.0

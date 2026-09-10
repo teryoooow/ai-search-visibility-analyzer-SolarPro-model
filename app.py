@@ -131,7 +131,7 @@ analyze_clicked = st.button(
 )
 
 
-# ── Loading state ──
+# ── Loading state & analysis ──
 if analyze_clicked and url:
     if not url.startswith("http"):
         st.error("Please enter a valid URL starting with http:// or https://")
@@ -145,7 +145,17 @@ if analyze_clicked and url:
                 st.session_state["aeo"] = aeo_result
                 st.session_state["geo"] = geo_result
                 st.session_state["url"] = url
-                st.rerun()
+                # Store any fetch/analysis warnings for display
+                warnings = []
+                if seo_result.page_status != 200:
+                    warnings.append(f"HTTP {seo_result.page_status} — some scores may be degraded")
+                if seo_result.page_status == 0:
+                    warnings.append("Page could not be fetched — check the URL or that the site allows scraping")
+                if getattr(aeo_result, 'fetch_failed', False):
+                    warnings.append("AEO analysis: page could not be fetched")
+                if getattr(geo_result, 'fetch_failed', False):
+                    warnings.append("GEO analysis: page could not be fetched")
+                st.session_state["warnings"] = warnings
             except Exception as e:
                 st.error(f"Analysis failed: {e}")
                 st.stop()
@@ -157,6 +167,12 @@ if "seo" in st.session_state:
     aeo = st.session_state["aeo"]
     geo = st.session_state["geo"]
     analysis_url = st.session_state["url"]
+    warnings = st.session_state.get("warnings", [])
+
+    # ── Warnings banner ──
+    if warnings:
+        for w in warnings:
+            st.warning(w)
 
     # ── URL Header ──
     st.markdown(f"### Analyzing: `{analysis_url}`")

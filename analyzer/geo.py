@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 class GEOMetrics:
     """GEO analysis results for a URL."""
     url: str
+    fetch_failed: bool = False
     domain: str = ""
     brand_name: str = ""
     brand_mentions: int = 0
@@ -49,6 +50,7 @@ class GEOMetrics:
     def to_dict(self) -> dict:
         return {
             "url": self.url,
+            "fetch_failed": self.fetch_failed,
             "domain": self.domain,
             "brand_name": self.brand_name,
             "brand_mentions": self.brand_mentions,
@@ -108,6 +110,7 @@ def analyze_geo(url: str) -> GEOMetrics:
 
     html = fetch_page(url)
     if html is None:
+        metrics.fetch_failed = True
         metrics.overall_score = 0.0
         return metrics
 
